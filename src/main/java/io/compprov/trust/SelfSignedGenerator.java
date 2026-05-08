@@ -3,22 +3,30 @@ package io.compprov.trust;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
-import java.security.*;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Utility for generating self-signed EC key pairs and PKCS#12 keystores.
+ * Convenience utility for generating self-signed EC key pairs and PKCS#12 keystores.
  * <p>
- * Intended for local development and testing only. In production, use certificates
- * issued by a trusted Certificate Authority so that
- * {@link Verifier.VerifiedData#signerCertStatusValidated()} returns {@code true}.
+ * Self-signed certificates carry no revocation data, so {@link Verifier.VerifiedData#signerCertStatusValidated()}
+ * will always be {@code false} for documents signed with them. For production use, prefer certificates
+ * issued by a trusted Certificate Authority.
  */
 public class SelfSignedGenerator {
 
@@ -42,9 +50,11 @@ public class SelfSignedGenerator {
      * @param dn      X.500 distinguished name, e.g. {@code CN=my-service,O=Example}
      * @param days    certificate validity period in days from now
      * @return a self-signed {@link X509Certificate}
-     * @throws Exception if certificate generation fails
+     * @throws OperatorCreationException if building the content signer fails
+     * @throws CertificateException      if converting the certificate structure fails
      */
-    public static X509Certificate generateSelfSigned(KeyPair keyPair, String dn, int days) throws Exception {
+    public static X509Certificate generateSelfSigned(KeyPair keyPair, String dn, int days)
+            throws OperatorCreationException, CertificateException {
         final var now = System.currentTimeMillis();
         final var startDate = new Date(now);
         final var endDate = new Date(now + TimeUnit.DAYS.toMillis(days));
@@ -66,9 +76,13 @@ public class SelfSignedGenerator {
      * @param cert     the corresponding certificate
      * @param password keystore protection password
      * @return PKCS#12 keystore bytes suitable for passing to {@link Signer#loadPkcs12}
-     * @throws Exception if keystore creation fails
+     * @throws KeyStoreException        if the PKCS12 keystore type is unavailable
+     * @throws CertificateException     if any certificate in the chain cannot be stored
+     * @throws IOException              if the keystore cannot be serialized
+     * @throws NoSuchAlgorithmException if the keystore integrity algorithm is unavailable
      */
-    public static byte[] buildPkcs12(KeyPair keyPair, X509Certificate cert, char[] password) throws Exception {
+    public static byte[] buildPkcs12(KeyPair keyPair, X509Certificate cert, char[] password)
+            throws KeyStoreException, CertificateException, IOException, NoSuchAlgorithmException {
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
 

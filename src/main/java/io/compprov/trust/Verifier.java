@@ -6,10 +6,15 @@ import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
 import eu.europa.esig.dss.spi.x509.CommonTrustedCertificateSource;
 import eu.europa.esig.dss.spi.x509.KeyStoreCertificateSource;
 import eu.europa.esig.dss.spi.x509.TrustedCertificateSource;
-import io.compprov.trust.exception.*;
+import io.compprov.trust.exception.AmbiguousDataException;
+import io.compprov.trust.exception.ContentExtractionException;
+import io.compprov.trust.exception.InvalidSignatureException;
+import io.compprov.trust.exception.NonSignedContentException;
+import io.compprov.trust.exception.TimestampNotFoundException;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -20,7 +25,7 @@ import java.util.List;
  * Validates an enveloping JAdES Baseline-LT document and extracts its payload.
  * <p>
  * Expects exactly one signature and one TSP timestamp. Any deviation — unsigned content,
- * multiple signers, missing or invalid timestamp — is reported as a {@link CompProvTrustException}.
+ * multiple signers, missing or invalid timestamp — is reported as a {@link io.compprov.trust.exception.CompProvTrustException}.
  */
 public class Verifier {
 
@@ -61,9 +66,11 @@ public class Verifier {
      * @throws InvalidSignatureException  if the cryptographic signature or timestamp is invalid
      * @throws AmbiguousDataException     if the document contains more than one signature or timestamp
      * @throws ContentExtractionException if the signed payload cannot be read
+     * @throws TimestampNotFoundException if the signature contains no TSP timestamp
      */
-    public VerifiedData verify(String jadesJson) throws CompProvTrustException {
-        final var document = new InMemoryDocument(jadesJson.getBytes());
+    public VerifiedData verify(String jadesJson) throws NonSignedContentException, AmbiguousDataException,
+            InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
+        final var document = new InMemoryDocument(jadesJson.getBytes(StandardCharsets.UTF_8));
 
         final var verifier = new CommonCertificateVerifier();
         if (trustSource != null) {
@@ -76,7 +83,7 @@ public class Verifier {
         final var reports = validator.validateDocument();
         final var simpleReport = reports.getSimpleReport();
 
-        //signature
+        //signature id
         final var signatureList = simpleReport.getSignatureIdList();
         if (signatureList.isEmpty()) {
             throw new NonSignedContentException();
@@ -84,10 +91,15 @@ public class Verifier {
             throw new AmbiguousDataException("Multiple signatures detected");
         }
         final var sigId = signatureList.get(0);
+
+        //validate signature
         final var signatureDetails = validator.getSignatureById(sigId);
         if (!signatureDetails.getSignatureCryptographicVerification().isSignatureValid()) {
             throw new InvalidSignatureException("isSignatureValid=false. "
                     + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
+        }
+        if (!simpleReport.isValid(sigId)) {
+            throw new InvalidSignatureException(sigId + " is not valid");
         }
         final var signerCertStatusValidated = !reports.getDiagnosticData().getSignatureById(sigId)
                 .getSigningCertificate().foundRevocations().getRelatedRevocationData().isEmpty();
@@ -108,7 +120,7 @@ public class Verifier {
         }
         final String payloadJson;
         try {
-            payloadJson = new String(docs.get(0).openStream().readAllBytes(), "UTF-8");
+            payloadJson = new String(docs.get(0).openStream().readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new ContentExtractionException("failed to read", e);
         }
@@ -130,11 +142,6 @@ public class Verifier {
         }
         final var timestampWrapper = reports.getDiagnosticData().getTimestampById(timestamp.getDSSIdAsString());
         final var timestampZdt = ZonedDateTime.ofInstant(timestampWrapper.getProductionTime().toInstant(), ZoneId.of("UTC"));
-
-        //validate report
-        if (!simpleReport.isValid(sigId)) {
-            throw new InvalidSignatureException(sigId + " is not valid");
-        }
 
         return new VerifiedData(payloadJson, timestampZdt, tspChain, signerChain, signerCertStatusValidated);
     }
