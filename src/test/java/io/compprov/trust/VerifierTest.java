@@ -17,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.ZonedDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,7 +42,7 @@ public class VerifierTest {
         final var cpgJson = new String(VerifierTest.class.getResourceAsStream("/cpg.json").readAllBytes());
         final var result = verifier.verify(signedJson);
 
-        assertNotNull(result.signedTimestamp());
+        assertEquals(ZonedDateTime.parse("2026-05-08T06:18:03Z[UTC]"), result.signedTimestamp());
         assertFalse(result.signerCertStatusValidated());
         assertEquals(1, result.signerChain().size());
         assertEquals(3, result.tspChain().size());
