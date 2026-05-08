@@ -1,0 +1,128 @@
+{
+  "descriptor" : {
+    "name" : "test",
+    "meta" : [ ]
+  },
+  "variables" : [ {
+    "track" : {
+      "id" : "i_1",
+      "numericId" : 1,
+      "createdAt" : "2026-05-08T06:16:54.6778873Z",
+      "kind" : "INPUT",
+      "descriptor" : {
+        "name" : "mc",
+        "meta" : [ ]
+      },
+      "valueClass" : "java.math.MathContext"
+    },
+    "value" : {
+      "precision" : 3,
+      "roundingMode" : "DOWN"
+    }
+  }, {
+    "track" : {
+      "id" : "i_2",
+      "numericId" : 2,
+      "createdAt" : "2026-05-08T06:16:54.6814005Z",
+      "kind" : "INPUT",
+      "descriptor" : {
+        "name" : "x",
+        "meta" : [ ]
+      },
+      "valueClass" : "java.math.BigDecimal"
+    },
+    "value" : "1"
+  }, {
+    "track" : {
+      "id" : "i_3",
+      "numericId" : 3,
+      "createdAt" : "2026-05-08T06:16:54.6833994Z",
+      "kind" : "INPUT",
+      "descriptor" : {
+        "name" : "y",
+        "meta" : [ ]
+      },
+      "valueClass" : "java.math.BigDecimal"
+    },
+    "value" : "2"
+  }, {
+    "track" : {
+      "id" : "o_4",
+      "numericId" : 4,
+      "createdAt" : "2026-05-08T06:16:54.6849038Z",
+      "kind" : "OUTPUT",
+      "descriptor" : {
+        "name" : "o_4",
+        "meta" : [ ]
+      },
+      "valueClass" : "java.math.BigDecimal"
+    },
+    "value" : "3"
+  }, {
+    "track" : {
+      "id" : "o_5",
+      "numericId" : 5,
+      "createdAt" : "2026-05-08T06:16:54.6874153Z",
+      "kind" : "OUTPUT",
+      "descriptor" : {
+        "name" : "result",
+        "meta" : [ ]
+      },
+      "valueClass" : "java.math.BigDecimal"
+    },
+    "value" : "-2"
+  } ],
+  "operations" : [ {
+    "track" : {
+      "id" : "op_1",
+      "numericId" : 1,
+      "startedAt" : "2026-05-08T06:16:54.6833994Z",
+      "finishedAt" : "2026-05-08T06:16:54.6849038Z",
+      "descriptor" : {
+        "name" : "add",
+        "meta" : [ {
+          "key" : "formula",
+          "value" : "(a+b)mc"
+        } ]
+      },
+      "wrapperClass" : "io.compprov.core.wrappers.WrappedBigDecimal"
+    },
+    "arguments" : [ {
+      "key" : "a",
+      "value" : "i_2"
+    }, {
+      "key" : "b",
+      "value" : "i_3"
+    }, {
+      "key" : "mc",
+      "value" : "i_1"
+    } ],
+    "resultId" : "o_4"
+  }, {
+    "track" : {
+      "id" : "op_2",
+      "numericId" : 2,
+      "startedAt" : "2026-05-08T06:16:54.6874153Z",
+      "finishedAt" : "2026-05-08T06:16:54.6874153Z",
+      "descriptor" : {
+        "name" : "subtract",
+        "meta" : [ {
+          "key" : "formula",
+          "value" : "(a-b)mc"
+        } ]
+      },
+      "wrapperClass" : "io.compprov.core.wrappers.WrappedBigDecimal"
+    },
+    "arguments" : [ {
+      "key" : "a",
+      "value" : "i_2"
+    }, {
+      "key" : "b",
+      "value" : "o_4"
+    }, {
+      "key" : "mc",
+      "value" : "i_1"
+    } ],
+    "resultId" : "o_5"
+  } ]
+}
