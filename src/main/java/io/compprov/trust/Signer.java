@@ -7,6 +7,8 @@ import eu.europa.esig.dss.enumerations.SignatureLevel;
 import eu.europa.esig.dss.enumerations.SignaturePackaging;
 import eu.europa.esig.dss.jades.JAdESSignatureParameters;
 import eu.europa.esig.dss.jades.signature.JAdESService;
+import eu.europa.esig.dss.model.DSSDocument;
+import eu.europa.esig.dss.model.DSSException;
 import eu.europa.esig.dss.model.InMemoryDocument;
 import eu.europa.esig.dss.service.http.commons.CommonsDataLoader;
 import eu.europa.esig.dss.service.tsp.OnlineTSPSource;
@@ -14,12 +16,13 @@ import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
 import eu.europa.esig.dss.spi.x509.TrustedCertificateSource;
 import eu.europa.esig.dss.token.Pkcs12SignatureToken;
 import io.compprov.trust.exception.AmbiguousDataException;
-import io.compprov.trust.exception.CompProvTrustException;
 import io.compprov.trust.exception.ContentExtractionException;
+import io.compprov.trust.exception.ExternalServiceException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 
 /**
@@ -82,16 +85,20 @@ public class Signer {
      *                             certificates issued by a trusted CA
      * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
      *         and embedded timestamp
-     * @throws CompProvTrustException if the keystore contains no key or more than one key,
-     *                                or if the signed document cannot be serialized
+     * @throws ContentExtractionException if the keystore contains no key, or if the signed document
+     *                                    cannot be serialized
+     * @throws AmbiguousDataException     if the keystore contains more than one key pair
+     * @throws ExternalServiceException   if the DSS signing or timestamping operation fails
      */
-    public String signJson(String jsonContent, boolean skipSignerValidation) throws CompProvTrustException {
-        if (signatureToken.getKeys().isEmpty()) {
-            throw new ContentExtractionException("key pair is nor found");
-        } else if (signatureToken.getKeys().size() > 1) {
+    public String signJson(String jsonContent, boolean skipSignerValidation)
+            throws ContentExtractionException, AmbiguousDataException, ExternalServiceException {
+        final var keys = signatureToken.getKeys();
+        if (keys.isEmpty()) {
+            throw new ContentExtractionException("key pair is not found");
+        } else if (keys.size() > 1) {
             throw new AmbiguousDataException("multiple key pairs detected");
         }
-        final var privateKey = signatureToken.getKeys().get(0);
+        final var privateKey = keys.get(0);
 
         final var parameters = new JAdESSignatureParameters();
         parameters.setSignatureLevel(SignatureLevel.JAdES_BASELINE_LT);
@@ -114,16 +121,21 @@ public class Signer {
         final var service = new JAdESService(verifier);
         service.setTspSource(tspSource);
 
-        final var documentToSign = new InMemoryDocument(jsonContent.getBytes());
-        final var dataToSign = service.getDataToSign(documentToSign, parameters);
+        final DSSDocument signedDocument;
+        try {
+            final var documentToSign = new InMemoryDocument(jsonContent.getBytes(StandardCharsets.UTF_8));
+            final var dataToSign = service.getDataToSign(documentToSign, parameters);
 
-        final var signatureValue = signatureToken.sign(dataToSign, parameters.getDigestAlgorithm(), privateKey);
-        final var signedDocument = service.signDocument(documentToSign, parameters, signatureValue);
+            final var signatureValue = signatureToken.sign(dataToSign, parameters.getDigestAlgorithm(), privateKey);
+            signedDocument = service.signDocument(documentToSign, parameters, signatureValue);
+        } catch (DSSException e) {
+            throw new ExternalServiceException("Failed to sign", e);
+        }
 
         try {
             final var baos = new ByteArrayOutputStream();
             signedDocument.writeTo(baos);
-            return baos.toString("UTF-8");
+            return baos.toString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new ContentExtractionException("failed to extract payload", e);
         }

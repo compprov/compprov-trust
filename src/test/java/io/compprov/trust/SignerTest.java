@@ -18,7 +18,7 @@ public class SignerTest {
     @Disabled("Calls external TSP service")
     @Test
     void sign() throws Exception {
-        final var cpgJson = new String(VerifierTest.class.getResourceAsStream("/cpg.json").readAllBytes());
+        final var cpgJson = new String(SignerTest.class.getResourceAsStream("/cpg.json").readAllBytes());
 
         final var kp = SelfSignedGenerator.generateKeyPair();
         final var cert = SelfSignedGenerator.generateSelfSigned(kp, "CN=compprov-test", 365);
