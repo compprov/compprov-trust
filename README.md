@@ -31,9 +31,24 @@ String jadesJson = signer.signJson(payloadJson, false);
 TrustedCertificateSource trust = Verifier.loadPkcs12(p12Stream, password);
 Verifier verifier = new Verifier(trust);
 Verifier.VerifiedData result = verifier.verify(jadesJson);
-// result.payloadJson()
-// result.signedTimestamp()
-// result.signerCertStatusValidated()  — false for self-signed; check against your policy
+
+//Avoid post-execution data manipulation
+// - make sure the CPG was created at expected date and time
+assertEquals(ZonedDateTime.parse("2026-05-08T06:18:03Z"), result.signedTimestamp());
+// - make sure we trust used tsp certificate
+assertEquals(tspCertificate, reParseCertificate(result.tspChain().get(0)));
+
+//Avoid CPG substitution
+//make sure the signer certificate is the one we expected
+assertEquals(signerCertificate, reParseCertificate(result.signerChain().get(0)));
+
+//CPG contains expected values
+//Recompute and compare result and other important values
+final var env = new DefaultComputationEnvironment();
+final var snapshot = env.fromJson(cpgJson);
+final var ctx = env.compute(snapshot);
+BigDecimal recomputedResult = (BigDecimal) ctx.findSingleVariable("result").getValue();
+assertEquals(BigDecimal.valueOf(-2), recomputedResult);
 ```
 
 ## Development and Testing
