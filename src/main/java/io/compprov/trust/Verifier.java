@@ -16,10 +16,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Validates an enveloping JAdES Baseline-LT document and extracts its payload.
@@ -29,16 +30,24 @@ import java.util.List;
  */
 public class Verifier {
 
-    private final TrustedCertificateSource trustSource;
+    private final Optional<TrustedCertificateSource> trustSource;
+
+    /**
+     * Creates a {@code Verifier} without a trust anchor.
+     */
+    public Verifier() {
+        this.trustSource = Optional.empty();
+    }
 
     /**
      * Creates a {@code Verifier} with the given trust anchor.
      *
      * @param trustSource trusted certificate source against which the signing certificate is
-     *                    validated; may be {@code null} to skip trust-anchor checks
+     *                    validated. For production use, prefer certificates issued by a trusted Certificate Authority
+     *                    and use {@code Verifier()} constructor
      */
     public Verifier(TrustedCertificateSource trustSource) {
-        this.trustSource = trustSource;
+        this.trustSource = Optional.ofNullable(trustSource);
     }
 
     /**
@@ -68,14 +77,33 @@ public class Verifier {
      * @throws ContentExtractionException if the signed payload cannot be read
      * @throws TimestampNotFoundException if the signature contains no TSP timestamp
      */
-    public VerifiedData verify(String jadesJson) throws NonSignedContentException, AmbiguousDataException,
+    public VerifiedData verify(String jadesJson)
+            throws NonSignedContentException, AmbiguousDataException,
+            InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
+        return verify(jadesJson, true);
+    }
+
+    /**
+     * Validates the given JAdES document and returns the extracted payload and metadata.
+     *
+     * @param jadesJson                                 JAdES JSON Serialization string, as produced by {@link Signer#signJson}
+     * @param requireSigningCertificateStatusValidation recommended to use {@code true} for production.
+     *                                                  For testing purposes and self-signed certificated could be set
+     *                                                  to {@code false}
+     * @return verified payload and signature metadata
+     * @throws NonSignedContentException  if the document contains no signature or no signed payload
+     * @throws InvalidSignatureException  if the cryptographic signature or timestamp is invalid
+     * @throws AmbiguousDataException     if the document contains more than one signature or timestamp
+     * @throws ContentExtractionException if the signed payload cannot be read
+     * @throws TimestampNotFoundException if the signature contains no TSP timestamp
+     */
+    public VerifiedData verify(String jadesJson, boolean requireSigningCertificateStatusValidation)
+            throws NonSignedContentException, AmbiguousDataException,
             InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
         final var document = new InMemoryDocument(jadesJson.getBytes(StandardCharsets.UTF_8));
 
         final var verifier = new CommonCertificateVerifier();
-        if (trustSource != null) {
-            verifier.setTrustedCertSources(trustSource);
-        }
+        trustSource.ifPresent(ts -> verifier.setTrustedCertSources(ts));
 
         final var validator = new JAdESDocumentValidatorFactory().create(document);
         validator.setCertificateVerifier(verifier);
@@ -83,7 +111,6 @@ public class Verifier {
         final var reports = validator.validateDocument();
         final var simpleReport = reports.getSimpleReport();
 
-        //signature id
         final var signatureList = simpleReport.getSignatureIdList();
         if (signatureList.isEmpty()) {
             throw new NonSignedContentException();
@@ -92,7 +119,6 @@ public class Verifier {
         }
         final var sigId = signatureList.get(0);
 
-        //validate signature
         final var signatureDetails = validator.getSignatureById(sigId);
         if (!signatureDetails.getSignatureCryptographicVerification().isSignatureValid()) {
             throw new InvalidSignatureException("isSignatureValid=false. "
@@ -103,6 +129,11 @@ public class Verifier {
         }
         final var signerCertStatusValidated = !reports.getDiagnosticData().getSignatureById(sigId)
                 .getSigningCertificate().foundRevocations().getRelatedRevocationData().isEmpty();
+        if ((!signerCertStatusValidated) && (requireSigningCertificateStatusValidation)) {
+            throw new InvalidSignatureException(sigId + " signing certificate status is not validated. " +
+                    "If self-signed certificates were used, specify TrustedCertificateSource when create Verifier and" +
+                    " verify signature using method verify(jadesJson, false)");
+        }
 
         final var signerChainIds = new HashSet<>(reports.getDiagnosticData().getSignatureCertificateChainIds(sigId));
         final var signerChain = signatureDetails.getCertificates()
@@ -111,7 +142,6 @@ public class Verifier {
                 .map(cert -> cert.getCertificate())
                 .toList();
 
-        //content
         final var docs = validator.getOriginalDocuments(sigId);
         if (docs.isEmpty()) {
             throw new NonSignedContentException();
@@ -125,7 +155,6 @@ public class Verifier {
             throw new ContentExtractionException("failed to read", e);
         }
 
-        //timestamp
         final var timestamps = signatureDetails.getAllTimestamps();
         if (timestamps.isEmpty()) {
             throw new TimestampNotFoundException();
@@ -141,7 +170,8 @@ public class Verifier {
             throw new InvalidSignatureException("timestamp.isValid=false");
         }
         final var timestampWrapper = reports.getDiagnosticData().getTimestampById(timestamp.getDSSIdAsString());
-        final var timestampZdt = ZonedDateTime.ofInstant(timestampWrapper.getProductionTime().toInstant(), ZoneId.of("UTC"));
+        final var timestampZdt = ZonedDateTime.ofInstant(
+                timestampWrapper.getProductionTime().toInstant(), ZoneOffset.UTC);
 
         return new VerifiedData(payloadJson, timestampZdt, tspChain, signerChain, signerCertStatusValidated);
     }
@@ -150,9 +180,10 @@ public class Verifier {
      * Immutable result of a successful {@link Verifier#verify} call.
      *
      * @param payloadJson               the original JSON payload extracted from the JAdES envelope
-     * @param signedTimestamp           UTC timestamp issued by the TSP service at signing time
-     * @param tspChain                  certificate chain of the TSP authority
-     * @param signerChain               certificate chain of the content signer
+     * @param signedTimestamp           UTC timestamp issued by the TSP service at signing time. Make sure the CPG was
+     *                                  created at expected date and time.
+     * @param tspChain                  certificate chain of the TSP authority. Make sure the chain is trusted by you.
+     * @param signerChain               certificate chain of the content signer. Make sure the chain is trusted by you.
      * @param signerCertStatusValidated {@code true} if revocation data (CRL or OCSP) was found for
      *                                  the signing certificate; {@code false} for self-signed certificates
      *                                  or when revocation status could not be confirmed — callers should

@@ -3,6 +3,7 @@ package io.compprov.trust;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
@@ -15,6 +16,8 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.Security;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
@@ -29,6 +32,14 @@ import java.util.concurrent.TimeUnit;
  * issued by a trusted Certificate Authority.
  */
 public class SelfSignedGenerator {
+
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    static {
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
 
     /**
      * Generates a new EC key pair on the {@code secp256r1} curve.
@@ -60,7 +71,7 @@ public class SelfSignedGenerator {
         final var endDate = new Date(now + TimeUnit.DAYS.toMillis(days));
 
         final var dnName = new X500Name(dn);
-        final var certSerialNumber = new BigInteger(Long.toString(now));
+        final var certSerialNumber = new BigInteger(64, SECURE_RANDOM);
 
         final var contentSigner = new JcaContentSignerBuilder("SHA256withECDSA").build(keyPair.getPrivate());
         final var certBuilder = new JcaX509v3CertificateBuilder(
