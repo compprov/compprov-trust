@@ -9,12 +9,16 @@ import eu.europa.esig.dss.spi.x509.TrustedCertificateSource;
 import io.compprov.core.DefaultComputationEnvironment;
 import io.compprov.trust.exception.InvalidSignatureException;
 import io.compprov.trust.exception.NonSignedContentException;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.util.encoders.Base64;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
+import java.security.Security;
+import java.security.cert.CertificateEncodingException;
+import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.time.ZonedDateTime;
@@ -25,29 +29,52 @@ public class VerifierTest {
 
     private String signedJson;
     private Verifier verifier;
+    private X509Certificate signerCertificate;
+    private X509Certificate tspCertificate;
+    private CertificateFactory certificateFactory;
 
     @BeforeEach
     void setUp() throws Exception {
+        Security.addProvider(new BouncyCastleProvider());
         signedJson = new String(VerifierTest.class.getResourceAsStream("/signed.json").readAllBytes());
-        String b64Cert = new String(VerifierTest.class.getResourceAsStream("/cert.cer").readAllBytes());
-        X509Certificate x509Cert = (X509Certificate) CertificateFactory.getInstance("x.509")
-                .generateCertificate(new ByteArrayInputStream(Base64.decode(b64Cert)));
+        String b64SignerCert = new String(VerifierTest.class.getResourceAsStream("/signer.cer").readAllBytes());
+        String b64TspCert = new String(VerifierTest.class.getResourceAsStream("/tsp.cer").readAllBytes());
+
+        certificateFactory = CertificateFactory.getInstance("x.509", BouncyCastleProvider.PROVIDER_NAME);
+        signerCertificate = (X509Certificate) certificateFactory
+                .generateCertificate(new ByteArrayInputStream(Base64.decode(b64SignerCert)));
+        tspCertificate = (X509Certificate) certificateFactory
+                .generateCertificate(new ByteArrayInputStream(Base64.decode(b64TspCert)));
         TrustedCertificateSource trust = new CommonTrustedCertificateSource();
-        trust.addCertificate(new CertificateToken(x509Cert));
+        trust.addCertificate(new CertificateToken(signerCertificate));
         verifier = new Verifier(trust);
     }
 
     @Test
     void verify() throws Exception {
         final var cpgJson = new String(VerifierTest.class.getResourceAsStream("/cpg.json").readAllBytes());
-        final var result = verifier.verify(signedJson);
+        final var result = verifier.verify(signedJson, false);
 
-        assertEquals(ZonedDateTime.parse("2026-05-08T06:18:03Z[UTC]"), result.signedTimestamp());
-        assertFalse(result.signerCertStatusValidated());
+        //for test purposes
         assertEquals(1, result.signerChain().size());
         assertEquals(3, result.tspChain().size());
         assertEquals(cpgJson, result.payloadJson());
 
+        //we use self-signed certificate for test purposes, should be true in production
+        assertFalse(result.signerCertStatusValidated());
+
+        //Avoid post-execution data manipulation
+        // - make sure the CPG was created at expected date and time
+        assertEquals(ZonedDateTime.parse("2026-05-08T06:18:03Z"), result.signedTimestamp());
+        // - make sure we trust used tsp certificate
+        assertEquals(tspCertificate, reParseCertificate(result.tspChain().get(0)));
+
+        //Avoid CPG substitution
+        //make sure the signer certificate is the one we expected
+        assertEquals(signerCertificate, reParseCertificate(result.signerChain().get(0)));
+
+        //CPG contains expected values
+        //Recompute and compare result and other important values
         final var env = new DefaultComputationEnvironment();
         final var snapshot = env.fromJson(cpgJson);
         final var ctx = env.compute(snapshot);
@@ -57,7 +84,7 @@ public class VerifierTest {
 
     @Test
     void verifyFailsForPlainJson() {
-        assertThrows(NonSignedContentException.class, () -> verifier.verify("{\"a\":\"b\"}"));
+        assertThrows(NonSignedContentException.class, () -> verifier.verify("{\"a\":\"b\"}", false));
     }
 
     @Test
@@ -68,7 +95,7 @@ public class VerifierTest {
         char flipped = (orig.charAt(0) == 'e') ? 'f' : 'e';
         root.put("payload", flipped + orig.substring(1));
 
-        assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
+        assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
     }
 
     @Test
@@ -84,7 +111,7 @@ public class VerifierTest {
         char flipped = (first == 'w') ? 'x' : 'w';
         sig.put("signature", flipped + origSig.substring(1));
 
-        assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
+        assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
     }
 
     @Test
@@ -94,6 +121,15 @@ public class VerifierTest {
         TrustedCertificateSource wrongTrust = new CommonTrustedCertificateSource();
         wrongTrust.addCertificate(new CertificateToken(cert));
 
-        assertThrows(InvalidSignatureException.class, () -> new Verifier(wrongTrust).verify(signedJson));
+        assertThrows(InvalidSignatureException.class, () -> new Verifier(wrongTrust).verify(signedJson, false));
+    }
+
+    @Test
+    void verifyFailsWithoutSigningCertificateStatusValidation() throws Exception {
+        assertThrows(InvalidSignatureException.class, () -> verifier.verify(signedJson));
+    }
+
+    private X509Certificate reParseCertificate(X509Certificate certificate) throws CertificateException {
+        return (X509Certificate) certificateFactory.generateCertificate(new ByteArrayInputStream(certificate.getEncoded()));
     }
 }

@@ -47,7 +47,7 @@
         <dependency>
             <groupId>io.compprov</groupId>
             <artifactId>compprov-core</artifactId>
-            <version>0.2.0</version>
+            <version>0.2.1</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>

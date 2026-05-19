@@ -47,6 +47,10 @@ public class SelfSignedGeneratorTest {
 
         var token = Signer.loadPkcs12(new ByteArrayInputStream(p12Bytes), password);
         assertEquals(1, token.getKeys().size());
-        assertNotNull(token.getKeys().get(0).getCertificate());
+
+        final var roundtripCert = token.getKeys().get(0).getCertificate().getCertificate();
+        assertNotNull(roundtripCert);
+        assertEquals("CN=roundtrip", roundtripCert.getSubjectX500Principal().getName());
+        assertEquals("EC", roundtripCert.getPublicKey().getAlgorithm());
     }
 }

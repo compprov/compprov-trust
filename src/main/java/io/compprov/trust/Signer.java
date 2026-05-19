@@ -14,7 +14,9 @@ import eu.europa.esig.dss.service.http.commons.CommonsDataLoader;
 import eu.europa.esig.dss.service.tsp.OnlineTSPSource;
 import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
 import eu.europa.esig.dss.spi.x509.TrustedCertificateSource;
+import eu.europa.esig.dss.spi.x509.tsp.TSPSource;
 import eu.europa.esig.dss.token.Pkcs12SignatureToken;
+import eu.europa.esig.dss.token.SignatureTokenConnection;
 import io.compprov.trust.exception.AmbiguousDataException;
 import io.compprov.trust.exception.ContentExtractionException;
 import io.compprov.trust.exception.ExternalServiceException;
@@ -34,32 +36,29 @@ import java.security.KeyStore;
  */
 public class Signer {
 
-    private final Pkcs12SignatureToken signatureToken;
-    private final OnlineTSPSource tspSource;
+    private final SignatureTokenConnection signatureToken;
+    private final TSPSource tspSource;
     private final TrustedCertificateSource trustSource;
 
     /**
      * Creates a {@code Signer} with an HTTP TSP endpoint.
      *
-     * @param signatureToken PKCS#12 token holding the signing key; must contain exactly one key pair
+     * @param signatureToken signature token holding the signing key; must contain exactly one key pair
      * @param tspSource      URL of the TSP service, e.g. {@code http://timestamp.digicert.com}
      * @param trustSource    trusted certificate source used during signing-time validation; may be {@code null}
      */
-    public Signer(Pkcs12SignatureToken signatureToken, String tspSource, TrustedCertificateSource trustSource) {
-        this.signatureToken = signatureToken;
-        this.trustSource = trustSource;
-        this.tspSource = new OnlineTSPSource(tspSource);
-        this.tspSource.setDataLoader(new CommonsDataLoader());
+    public Signer(SignatureTokenConnection signatureToken, String tspSource, TrustedCertificateSource trustSource) {
+        this(signatureToken, buildTspSource(tspSource), trustSource);
     }
 
     /**
      * Creates a {@code Signer} with a pre-configured TSP source.
      *
-     * @param signatureToken PKCS#12 token holding the signing key; must contain exactly one key pair
+     * @param signatureToken signature token holding the signing key; must contain exactly one key pair
      * @param tspSource      pre-configured TSP source
      * @param trustSource    trusted certificate source used during signing-time validation; may be {@code null}
      */
-    public Signer(Pkcs12SignatureToken signatureToken, OnlineTSPSource tspSource, TrustedCertificateSource trustSource) {
+    public Signer(SignatureTokenConnection signatureToken, TSPSource tspSource, TrustedCertificateSource trustSource) {
         this.signatureToken = signatureToken;
         this.tspSource = tspSource;
         this.trustSource = trustSource;
@@ -79,10 +78,10 @@ public class Signer {
     /**
      * Signs the given JSON string and returns a JAdES Baseline-LT envelope as a JSON string.
      *
-     * @param jsonContent          JSON payload to sign; must be valid UTF-8
-     * @param skipSignerValidation set to {@code true} for self-signed certificates to suppress
-     *                             missing-revocation-data errors during signing; {@code false} for
-     *                             certificates issued by a trusted CA
+     * @param jsonContent         JSON payload to sign; must be valid UTF-8
+     * @param skipRevocationCheck set to {@code true} for self-signed certificates to suppress
+     *                            missing-revocation-data errors during signing; {@code false} for
+     *                            certificates issued by a trusted CA
      * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
      *         and embedded timestamp
      * @throws ContentExtractionException if the keystore contains no key, or if the signed document
@@ -90,7 +89,7 @@ public class Signer {
      * @throws AmbiguousDataException     if the keystore contains more than one key pair
      * @throws ExternalServiceException   if the DSS signing or timestamping operation fails
      */
-    public String signJson(String jsonContent, boolean skipSignerValidation)
+    public String signJson(String jsonContent, boolean skipRevocationCheck)
             throws ContentExtractionException, AmbiguousDataException, ExternalServiceException {
         final var keys = signatureToken.getKeys();
         if (keys.isEmpty()) {
@@ -114,7 +113,7 @@ public class Signer {
         if (trustSource != null) {
             verifier.addTrustedCertSources(trustSource);
         }
-        if (skipSignerValidation) {
+        if (skipRevocationCheck) {
             verifier.setAlertOnMissingRevocationData(new SilentOnStatusAlert());
         }
 
@@ -125,11 +124,10 @@ public class Signer {
         try {
             final var documentToSign = new InMemoryDocument(jsonContent.getBytes(StandardCharsets.UTF_8));
             final var dataToSign = service.getDataToSign(documentToSign, parameters);
-
             final var signatureValue = signatureToken.sign(dataToSign, parameters.getDigestAlgorithm(), privateKey);
             signedDocument = service.signDocument(documentToSign, parameters, signatureValue);
         } catch (DSSException e) {
-            throw new ExternalServiceException("Failed to sign", e);
+            throw new ExternalServiceException("Failed to sign: " + e.getMessage(), e);
         }
 
         try {
@@ -139,5 +137,11 @@ public class Signer {
         } catch (IOException e) {
             throw new ContentExtractionException("failed to extract payload", e);
         }
+    }
+
+    private static OnlineTSPSource buildTspSource(String url) {
+        final var source = new OnlineTSPSource(url);
+        source.setDataLoader(new CommonsDataLoader());
+        return source;
     }
 }
