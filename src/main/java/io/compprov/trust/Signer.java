@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.util.Optional;
 
 /**
  * Signs JSON content as an enveloping JAdES Baseline-LT signature.
@@ -38,16 +39,16 @@ public class Signer {
 
     private final SignatureTokenConnection signatureToken;
     private final TSPSource tspSource;
-    private final TrustedCertificateSource trustSource;
+    private final Optional<TrustedCertificateSource> trustSource;
 
     /**
      * Creates a {@code Signer} with an HTTP TSP endpoint.
      *
      * @param signatureToken signature token holding the signing key; must contain exactly one key pair
      * @param tspSource      URL of the TSP service, e.g. {@code http://timestamp.digicert.com}
-     * @param trustSource    trusted certificate source used during signing-time validation; may be {@code null}
+     * @param trustSource    trusted certificate source used during signing-time validation
      */
-    public Signer(SignatureTokenConnection signatureToken, String tspSource, TrustedCertificateSource trustSource) {
+    public Signer(SignatureTokenConnection signatureToken, String tspSource, Optional<TrustedCertificateSource> trustSource) {
         this(signatureToken, buildTspSource(tspSource), trustSource);
     }
 
@@ -56,9 +57,9 @@ public class Signer {
      *
      * @param signatureToken signature token holding the signing key; must contain exactly one key pair
      * @param tspSource      pre-configured TSP source
-     * @param trustSource    trusted certificate source used during signing-time validation; may be {@code null}
+     * @param trustSource    trusted certificate source used during signing-time validation
      */
-    public Signer(SignatureTokenConnection signatureToken, TSPSource tspSource, TrustedCertificateSource trustSource) {
+    public Signer(SignatureTokenConnection signatureToken, TSPSource tspSource, Optional<TrustedCertificateSource> trustSource) {
         this.signatureToken = signatureToken;
         this.tspSource = tspSource;
         this.trustSource = trustSource;
@@ -78,12 +79,28 @@ public class Signer {
     /**
      * Signs the given JSON string and returns a JAdES Baseline-LT envelope as a JSON string.
      *
+     * @param jsonContent JSON payload to sign; must be valid UTF-8
+     * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
+     * and embedded timestamp
+     * @throws ContentExtractionException if the keystore contains no key, or if the signed document
+     *                                    cannot be serialized
+     * @throws AmbiguousDataException     if the keystore contains more than one key pair
+     * @throws ExternalServiceException   if the DSS signing or timestamping operation fails
+     */
+    public String signJson(String jsonContent)
+            throws ContentExtractionException, AmbiguousDataException, ExternalServiceException {
+        return signJson(jsonContent, false);
+    }
+
+    /**
+     * Signs the given JSON string and returns a JAdES Baseline-LT envelope as a JSON string.
+     *
      * @param jsonContent         JSON payload to sign; must be valid UTF-8
      * @param skipRevocationCheck set to {@code true} for self-signed certificates to suppress
      *                            missing-revocation-data errors during signing; {@code false} for
      *                            certificates issued by a trusted CA
      * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
-     *         and embedded timestamp
+     * and embedded timestamp
      * @throws ContentExtractionException if the keystore contains no key, or if the signed document
      *                                    cannot be serialized
      * @throws AmbiguousDataException     if the keystore contains more than one key pair
@@ -110,9 +127,7 @@ public class Signer {
         parameters.bLevel().setTrustAnchorBPPolicy(false);
 
         final var verifier = new CommonCertificateVerifier();
-        if (trustSource != null) {
-            verifier.addTrustedCertSources(trustSource);
-        }
+        trustSource.ifPresent(ts -> verifier.addTrustedCertSources(ts));
         if (skipRevocationCheck) {
             verifier.setAlertOnMissingRevocationData(new SilentOnStatusAlert());
         }

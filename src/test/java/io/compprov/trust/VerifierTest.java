@@ -115,6 +115,32 @@ public class VerifierTest {
     }
 
     @Test
+    void verifyFailsForTamperedTSP() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode root = (ObjectNode) mapper.readTree(signedJson);
+        ObjectNode sig = (ObjectNode) ((ArrayNode) root.get("signatures")).get(0);
+        ArrayNode etsiU = (ArrayNode) sig.get("header").get("etsiU");
+
+        // etsiU[0] is base64url-encoded JSON containing sigTst.tstTokens[0].val (DER timestamp token)
+        String etsiU0 = etsiU.get(0).asText();
+        byte[] etsiU0Bytes = java.util.Base64.getUrlDecoder().decode(etsiU0);
+        ObjectNode sigTstJson = (ObjectNode) mapper.readTree(etsiU0Bytes);
+
+        ObjectNode tstToken = (ObjectNode) ((ArrayNode) sigTstJson.get("sigTst").get("tstTokens")).get(0);
+        String val = tstToken.get("val").asText();
+        // Decode the DER bytes and flip a byte in the TSA signature, which sits at the end of the CMS structure
+        byte[] tstBytes = java.util.Base64.getDecoder().decode(val);
+        tstBytes[tstBytes.length - 5] ^= 0xFF;
+        tstToken.put("val", java.util.Base64.getEncoder().encodeToString(tstBytes));
+
+        etsiU.set(0, mapper.getNodeFactory().textNode(
+                java.util.Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
+
+        assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+    }
+
+    @Test
     void verifyFailsForWrongTrustAnchor() throws Exception {
         var kp = SelfSignedGenerator.generateKeyPair();
         var cert = SelfSignedGenerator.generateSelfSigned(kp, "CN=wrong", 1);
