@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -27,7 +28,7 @@ public class SignerTest {
         final var sigToken = Signer.loadPkcs12(new ByteArrayInputStream(p12), "123".toCharArray());
         final var trustStore = Verifier.loadPkcs12(new ByteArrayInputStream(p12), "123".toCharArray());
 
-        final var signer = new Signer(sigToken, "http://timestamp.digicert.com", trustStore);
+        final var signer = new Signer(sigToken, "http://timestamp.digicert.com", Optional.of(trustStore));
         final var signed = signer.signJson(cpgJson, true);
         System.out.println("Signed: " + signed);
     }
@@ -40,9 +41,9 @@ public class SignerTest {
         ks.store(baos, "test".toCharArray());
 
         Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), "test".toCharArray());
-        Signer signer = new Signer(token, "http://not-needed.example.com", null);
+        Signer signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
 
-        assertThrows(ContentExtractionException.class, () -> signer.signJson("{}", false));
+        assertThrows(ContentExtractionException.class, () -> signer.signJson("{}"));
     }
 
     @Test
@@ -61,8 +62,8 @@ public class SignerTest {
         ks.store(baos, pass);
 
         Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), pass);
-        Signer signer = new Signer(token, "http://not-needed.example.com", null);
+        Signer signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
 
-        assertThrows(AmbiguousDataException.class, () -> signer.signJson("{}", false));
+        assertThrows(AmbiguousDataException.class, () -> signer.signJson("{}"));
     }
 }
