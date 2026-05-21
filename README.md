@@ -11,12 +11,6 @@ Wraps a JSON payload (typically a Computational Provenance Graph) in an **envelo
 - Deterministic verification: exactly one signer, one payload, one timestamp
 - Certificate revocation status reported per verified document
 
-## Requirements
-
-- Java 17+
-- A PKCS#12 keystore with exactly one EC key pair
-- An RFC 3161-compliant TSP endpoint (e.g. `http://timestamp.digicert.com`)
-
 ## Usage
 
 **Sign:**
