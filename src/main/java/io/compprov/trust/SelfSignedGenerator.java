@@ -1,6 +1,9 @@
 package io.compprov.trust;
 
 import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.KeyPurposeId;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -77,6 +80,37 @@ public class SelfSignedGenerator {
         final var certBuilder = new JcaX509v3CertificateBuilder(
                 dnName, certSerialNumber, startDate, endDate, dnName, keyPair.getPublic());
 
+        return new JcaX509CertificateConverter().getCertificate(certBuilder.build(contentSigner));
+    }
+
+    /**
+     * Issues a self-signed X.509 certificate suitable for use as a TSA (Time-Stamp Authority).
+     * <p>
+     * Identical to {@link #generateSelfSigned} except the certificate carries the critical
+     * {@code id-kp-timeStamping} Extended Key Usage extension required by RFC 3161 and enforced
+     * by the BouncyCastle {@code TimeStampTokenGenerator}.
+     *
+     * @param keyPair the key pair to certify
+     * @param dn      X.500 distinguished name, e.g. {@code CN=tsa,O=Example}
+     * @param days    certificate validity period in days from now
+     * @return a self-signed TSA {@link X509Certificate}
+     * @throws OperatorCreationException if building the content signer fails
+     * @throws CertificateException      if converting the certificate structure fails
+     * @throws IOException               if adding the EKU extension fails
+     */
+    public static X509Certificate generateTsaSelfSigned(KeyPair keyPair, String dn, int days)
+            throws OperatorCreationException, CertificateException, IOException {
+        final var now = System.currentTimeMillis();
+        final var startDate = new Date(now);
+        final var endDate = new Date(now + TimeUnit.DAYS.toMillis(days));
+        final var dnName = new X500Name(dn);
+        final var certSerialNumber = new BigInteger(64, SECURE_RANDOM);
+        final var contentSigner = new JcaContentSignerBuilder("SHA256withECDSA").build(keyPair.getPrivate());
+        final var certBuilder = new JcaX509v3CertificateBuilder(
+                dnName, certSerialNumber, startDate, endDate, dnName, keyPair.getPublic());
+        certBuilder.addExtension(
+                Extension.extendedKeyUsage, true,
+                new ExtendedKeyUsage(KeyPurposeId.id_kp_timeStamping));
         return new JcaX509CertificateConverter().getCertificate(certBuilder.build(contentSigner));
     }
 

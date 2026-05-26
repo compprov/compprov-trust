@@ -1,8 +1,11 @@
 package io.compprov.trust;
 
+import eu.europa.esig.dss.model.DSSException;
+import eu.europa.esig.dss.spi.x509.tsp.TSPSource;
 import eu.europa.esig.dss.token.Pkcs12SignatureToken;
 import io.compprov.trust.exception.AmbiguousDataException;
 import io.compprov.trust.exception.ContentExtractionException;
+import io.compprov.trust.exception.ExternalServiceException;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
@@ -65,5 +68,18 @@ public class SignerTest {
         Signer signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
 
         assertThrows(AmbiguousDataException.class, () -> signer.signJson("{}"));
+    }
+
+    @Test
+    void signFailsForBrokenTsp() throws Exception {
+        var kp = SelfSignedGenerator.generateKeyPair();
+        var cert = SelfSignedGenerator.generateSelfSigned(kp, "CN=test", 1);
+        var p12 = SelfSignedGenerator.buildPkcs12(kp, cert, "pass".toCharArray());
+
+        Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(p12), "pass".toCharArray());
+        TSPSource brokenTsp = (digestAlgorithm, digest) -> { throw new DSSException("TSP unavailable"); };
+        Signer signer = new Signer(token, brokenTsp, Optional.empty());
+
+        assertThrows(ExternalServiceException.class, () -> signer.signJson("{}", true));
     }
 }

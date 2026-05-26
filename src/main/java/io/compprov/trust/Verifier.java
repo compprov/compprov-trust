@@ -1,5 +1,6 @@
 package io.compprov.trust;
 
+import eu.europa.esig.dss.enumerations.TimestampType;
 import eu.europa.esig.dss.jades.validation.JAdESDocumentValidatorFactory;
 import eu.europa.esig.dss.model.InMemoryDocument;
 import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
@@ -9,18 +10,23 @@ import eu.europa.esig.dss.spi.x509.TrustedCertificateSource;
 import io.compprov.trust.exception.AmbiguousDataException;
 import io.compprov.trust.exception.ContentExtractionException;
 import io.compprov.trust.exception.InvalidSignatureException;
+import io.compprov.trust.exception.InvalidSignatureException.Code;
 import io.compprov.trust.exception.NonSignedContentException;
 import io.compprov.trust.exception.TimestampNotFoundException;
+import org.jose4j.base64url.Base64Url;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * Validates an enveloping JAdES Baseline-LT document and extracts its payload.
@@ -100,7 +106,7 @@ public class Verifier {
     public VerifiedData verify(String jadesJson, boolean requireSigningCertificateStatusValidation)
             throws NonSignedContentException, AmbiguousDataException,
             InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
-        final var document = new InMemoryDocument(jadesJson.getBytes(StandardCharsets.UTF_8));
+        final var document = new InMemoryDocument(jadesJson.getBytes(UTF_8));
 
         final var verifier = new CommonCertificateVerifier();
         trustSource.ifPresent(ts -> verifier.setTrustedCertSources(ts));
@@ -120,17 +126,27 @@ public class Verifier {
         final var sigId = signatureList.get(0);
 
         final var signatureDetails = validator.getSignatureById(sigId);
-        if (!signatureDetails.getSignatureCryptographicVerification().isSignatureValid()) {
-            throw new InvalidSignatureException("isSignatureValid=false. "
+        if (!signatureDetails.getSignatureCryptographicVerification().isReferenceDataFound()) {
+            throw new InvalidSignatureException(Code.PAYLOAD_NOT_FOUND, "isReferenceDataFound=false. "
                     + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
         }
-        if (!simpleReport.isValid(sigId)) {
-            throw new InvalidSignatureException(sigId + " is not valid");
+        if (!signatureDetails.getSignatureCryptographicVerification().isReferenceDataIntact()) {
+            throw new InvalidSignatureException(Code.PAYLOAD_TAMPERED, "isReferenceDataIntact=false. "
+                    + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
+        }
+        if (!signatureDetails.getSignatureCryptographicVerification().isSignatureIntact()) {
+            throw new InvalidSignatureException(Code.SIGNATURE_TAMPERED, "isSignatureIntact=false. "
+                    + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
+        }
+        if (!signatureDetails.getSignatureCryptographicVerification().isSignatureValid()) {
+            throw new InvalidSignatureException(Code.SIGNATURE_INVALID, "isSignatureValid=false. "
+                    + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
         }
         final var signerCertStatusValidated = !reports.getDiagnosticData().getSignatureById(sigId)
                 .getSigningCertificate().foundRevocations().getRelatedRevocationData().isEmpty();
         if ((!signerCertStatusValidated) && (requireSigningCertificateStatusValidation)) {
-            throw new InvalidSignatureException(sigId + " signing certificate status is not validated. " +
+            throw new InvalidSignatureException(Code.SIGNER_CERT_STATUS_NOT_VALIDATED,
+                    sigId + " signing certificate status is not validated. " +
                     "If self-signed certificates were used, specify TrustedCertificateSource when create Verifier and" +
                     " verify signature using method verify(jadesJson, false)");
         }
@@ -150,7 +166,7 @@ public class Verifier {
         }
         final String payloadJson;
         try {
-            payloadJson = new String(docs.get(0).openStream().readAllBytes(), StandardCharsets.UTF_8);
+            payloadJson = new String(docs.get(0).openStream().readAllBytes(), UTF_8);
         } catch (IOException e) {
             throw new ContentExtractionException("failed to read", e);
         }
@@ -166,9 +182,41 @@ public class Verifier {
                 .stream()
                 .map(cert -> cert.getCertificate())
                 .toList();
-        if ((!timestamp.isValid()) || (!timestamp.isProcessed())) {
-            throw new InvalidSignatureException("timestamp.isValid=false");
+        if (timestamp.getTimeStampType() != TimestampType.SIGNATURE_TIMESTAMP) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_WRONG_TYPE, "Invalid timestamp type: " + timestamp.getTimeStampType());
         }
+        if (!timestamp.isProcessed()) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_NOT_PROCESSED, "timestamp.isProcessed=false");
+        }
+        if (!timestamp.isMessageImprintDataFound()) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_IMPRINT_NOT_FOUND, "timestamp.isMessageImprintDataFound=false");
+        }
+        if (!timestamp.isMessageImprintDataIntact()) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_IMPRINT_TAMPERED, "timestamp.isMessageImprintDataIntact=false");
+        }
+        if (!timestamp.isSignatureIntact()) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_SIGNATURE_TAMPERED, "timestamp.isSignatureIntact=false");
+        }
+
+        final var tspMessageImprint = timestamp.getMessageImprint();
+        final var encodedSignatureValue = Base64Url.encode(signatureDetails.getSignatureValue()).getBytes(UTF_8);
+        final byte[] sigDig;
+        try {
+            sigDig = tspMessageImprint.getAlgorithm().getMessageDigest().digest(encodedSignatureValue);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
+        if (!Arrays.equals(tspMessageImprint.getValue(), sigDig)) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_COVERS_WRONG_DATA, "timestamp.matchData(sig)=false");
+        }
+        if (!timestamp.isValid()) {
+            throw new InvalidSignatureException(Code.TIMESTAMP_INVALID, "timestamp.isValid=false");
+        }
+
+        if (!simpleReport.isValid(sigId)) {
+            throw new InvalidSignatureException(Code.SIGNATURE_NOT_VALID, sigId + " is not valid");
+        }
+
         final var timestampWrapper = reports.getDiagnosticData().getTimestampById(timestamp.getDSSIdAsString());
         final var timestampZdt = ZonedDateTime.ofInstant(
                 timestampWrapper.getProductionTime().toInstant(), ZoneOffset.UTC);
