@@ -38,7 +38,7 @@ assertEquals(signerCertificate, reParseCertificate(result.signerChain().get(0)))
 
 //CPG contains expected values
 //Recompute and compare result and other important values
-final var env = new DefaultComputationEnvironment();
+final var env = DefaultComputationEnvironment.create();
 final var snapshot = env.fromJson(cpgJson);
 final var ctx = env.compute(snapshot);
 BigDecimal recomputedResult = (BigDecimal) ctx.findSingleVariable("result").getValue();
