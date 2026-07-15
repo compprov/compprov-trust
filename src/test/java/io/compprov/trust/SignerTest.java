@@ -2,7 +2,6 @@ package io.compprov.trust;
 
 import eu.europa.esig.dss.model.DSSException;
 import eu.europa.esig.dss.spi.x509.tsp.TSPSource;
-import eu.europa.esig.dss.token.Pkcs12SignatureToken;
 import io.compprov.trust.exception.AmbiguousDataException;
 import io.compprov.trust.exception.ContentExtractionException;
 import io.compprov.trust.exception.ExternalServiceException;
@@ -38,47 +37,47 @@ public class SignerTest {
 
     @Test
     void signFailsForEmptyKeystore() throws Exception {
-        KeyStore ks = KeyStore.getInstance("PKCS12");
+        final var ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        final var baos = new ByteArrayOutputStream();
         ks.store(baos, "test".toCharArray());
 
-        Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), "test".toCharArray());
-        Signer signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
+        final var token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), "test".toCharArray());
+        final var signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
 
         assertThrows(ContentExtractionException.class, () -> signer.signJson("{}"));
     }
 
     @Test
     void signFailsForMultipleKeys() throws Exception {
-        var kp1 = SelfSignedGenerator.generateKeyPair();
-        var kp2 = SelfSignedGenerator.generateKeyPair();
-        var cert1 = SelfSignedGenerator.generateSelfSigned(kp1, "CN=key1", 1);
-        var cert2 = SelfSignedGenerator.generateSelfSigned(kp2, "CN=key2", 1);
+        final var kp1 = SelfSignedGenerator.generateKeyPair();
+        final var kp2 = SelfSignedGenerator.generateKeyPair();
+        final var cert1 = SelfSignedGenerator.generateSelfSigned(kp1, "CN=key1", 1);
+        final var cert2 = SelfSignedGenerator.generateSelfSigned(kp2, "CN=key2", 1);
 
-        char[] pass = "pass".toCharArray();
-        KeyStore ks = KeyStore.getInstance("PKCS12");
+        final var pass = "pass".toCharArray();
+        final var ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
         ks.setKeyEntry("key1", kp1.getPrivate(), pass, new X509Certificate[]{cert1});
         ks.setKeyEntry("key2", kp2.getPrivate(), pass, new X509Certificate[]{cert2});
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        final var baos = new ByteArrayOutputStream();
         ks.store(baos, pass);
 
-        Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), pass);
-        Signer signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
+        final var token = Signer.loadPkcs12(new ByteArrayInputStream(baos.toByteArray()), pass);
+        final var signer = new Signer(token, "http://not-needed.example.com", Optional.empty());
 
         assertThrows(AmbiguousDataException.class, () -> signer.signJson("{}"));
     }
 
     @Test
     void signFailsForBrokenTsp() throws Exception {
-        var kp = SelfSignedGenerator.generateKeyPair();
-        var cert = SelfSignedGenerator.generateSelfSigned(kp, "CN=test", 1);
-        var p12 = SelfSignedGenerator.buildPkcs12(kp, cert, "pass".toCharArray());
+        final var kp = SelfSignedGenerator.generateKeyPair();
+        final var cert = SelfSignedGenerator.generateSelfSigned(kp, "CN=test", 1);
+        final var p12 = SelfSignedGenerator.buildPkcs12(kp, cert, "pass".toCharArray());
 
-        Pkcs12SignatureToken token = Signer.loadPkcs12(new ByteArrayInputStream(p12), "pass".toCharArray());
-        TSPSource brokenTsp = (digestAlgorithm, digest) -> { throw new DSSException("TSP unavailable"); };
-        Signer signer = new Signer(token, brokenTsp, Optional.empty());
+        final var token = Signer.loadPkcs12(new ByteArrayInputStream(p12), "pass".toCharArray());
+        final TSPSource brokenTsp = (digestAlgorithm, digest) -> { throw new DSSException("TSP unavailable"); };
+        final var signer = new Signer(token, brokenTsp, Optional.empty());
 
         assertThrows(ExternalServiceException.class, () -> signer.signJson("{}", true));
     }

@@ -52,7 +52,7 @@ public class SelfSignedGenerator {
      * @throws InvalidAlgorithmParameterException if {@code secp256r1} is not available
      */
     public static KeyPair generateKeyPair() throws NoSuchAlgorithmException, InvalidAlgorithmParameterException {
-        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("EC");
+        final var keyPairGenerator = KeyPairGenerator.getInstance("EC");
         keyPairGenerator.initialize(new ECGenParameterSpec("secp256r1"));
         return keyPairGenerator.generateKeyPair();
     }
@@ -128,11 +128,11 @@ public class SelfSignedGenerator {
      */
     public static byte[] buildPkcs12(KeyPair keyPair, X509Certificate cert, char[] password)
             throws KeyStoreException, CertificateException, IOException, NoSuchAlgorithmException {
-        KeyStore ks = KeyStore.getInstance("PKCS12");
+        final var ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
 
         ks.setKeyEntry("key", keyPair.getPrivate(), password, new X509Certificate[]{cert});
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        final var baos = new ByteArrayOutputStream();
         ks.store(baos, password);
         return baos.toByteArray();
     }
