@@ -70,55 +70,55 @@
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-jades</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-service</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-token</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-validation</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-utils-google-guava</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>eu.europa.ec.joinup.sd-dss</groupId>
             <artifactId>dss-policy-jaxb</artifactId>
-            <version>6.4</version>
+            <version>6.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.86</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcutil-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.86</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.86</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
