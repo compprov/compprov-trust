@@ -11,45 +11,96 @@ Wraps a JSON payload (typically a Calculation Provenance Graph) in an **envelopi
 - Deterministic verification: exactly one signer, one payload, one timestamp
 - Certificate revocation status reported per verified document
 
+## Installation
+
+Add the dependency to your `pom.xml` (latest version: [![Maven Central](https://img.shields.io/maven-central/v/io.compprov/compprov-trust?color=brightgreen)](https://central.sonatype.com/artifact/io.compprov/compprov-trust)):
+
+```xml
+<dependency>
+    <groupId>io.compprov</groupId>
+    <artifactId>compprov-trust</artifactId>
+    <version>VERSION</version>
+</dependency>
+```
+
+Requires Java 17+.
+
 ## Usage
 
 **Sign:**
 ```java
 Pkcs12SignatureToken token = Signer.loadPkcs12(p12Stream, password);
-Signer signer = new Signer(token, "http://timestamp.digicert.com", trustSource);
-String jadesJson = signer.signJson(payloadJson, false);
+Signer signer = Signer.builder(token)
+        .tspUrl("http://timestamp.digicert.com")   // or .tspSource(customTspSource)
+        .build();
+String jadesJson = signer.signJson(cpgJson);
 ```
 
 **Verify:**
 ```java
-TrustedCertificateSource trust = Verifier.loadPkcs12(p12Stream, password);
-Verifier verifier = new Verifier(trust);
+// Trust anchor for the signer: the root certificate of the issuing CA,
+// or the signer certificate itself when it is self-signed
+TrustedCertificateSource trust = Verifier.loadPkcs12(trustP12Stream, password);
+Verifier verifier = Verifier.builder(trust).build();
 Verifier.VerifiedData result = verifier.verify(jadesJson);
 
-//Avoid post-execution data manipulation
-// - make sure the CPG was created at expected date and time
+// Avoid post-execution data manipulation
+// - make sure the CPG was created at the expected date and time
 assertEquals(ZonedDateTime.parse("2026-05-08T06:18:03Z"), result.signedTimestamp());
-// - make sure we trust used tsp certificate
-assertEquals(tspCertificate, reParseCertificate(result.tspChain().get(0)));
+// - make sure you trust the TSP that issued the timestamp. The verifier only checks that the
+//   timestamp is cryptographically sound; it does not check who issued it
+assertTrue(result.tspChain().contains(tspCertificate));
 
-//Avoid CPG substitution
-//make sure the signer certificate is the one we expected
-assertEquals(signerCertificate, reParseCertificate(result.signerChain().get(0)));
+// Avoid CPG substitution
+// - make sure the signer certificate is the one you expect
+assertEquals(signerCertificate, result.signerChain().get(0));
 
-//CPG contains expected values
-//Recompute and compare result and other important values
+// Make sure the CPG contains the expected values:
+// recompute it and compare the result and other important values
 final var env = DefaultComputationEnvironment.create();
-final var snapshot = env.fromJson(cpgJson);
+final var snapshot = env.fromJson(result.payloadJson());
 final var ctx = env.compute(snapshot);
 BigDecimal recomputedResult = (BigDecimal) ctx.findSingleVariable("result").getValue();
 assertEquals(BigDecimal.valueOf(-2), recomputedResult);
 ```
 
+`DefaultComputationEnvironment` comes from [compprov-core](https://github.com/compprov/compprov-core),
+which you add as a separate dependency.
+
+**Errors:** every failure is a subclass of `CompProvTrustException`. `InvalidSignatureException`
+carries a `Code` (e.g. `SIGNED_DATA_TAMPERED`, `TIMESTAMP_COVERS_WRONG_DATA`, `UNSUPPORTED_FORMAT`)
+that tells you exactly which check failed.
+
+## Format version
+
+Every signed document declares its format version in the signed `cty` (content type) JWS header:
+
+```json
+"cty": "vnd.compprov.trust.v1+json"
+```
+
+The value is available as `Signer.CONTENT_TYPE_V1`. `Verifier` rejects documents declaring any other
+value with `InvalidSignatureException.Code.UNSUPPORTED_FORMAT`, so a verifier never misreads a document
+written in a newer format. Documents without `cty` were signed before format versioning was introduced
+and are treated as v1.
+
 ## Development and Testing
 
 `SelfSignedGenerator` can produce a temporary EC key pair and PKCS#12 keystore for local testing.
-Pass `skipSignerValidation = true` to `signJson` when using self-signed certificates to suppress
-revocation errors at signing time. Do not use self-signed certificates in production.
+Self-signed certificates carry no revocation data (CRL/OCSP), so enable `allowMissingRevocationData(true)`
+on both builders when using them:
+
+```java
+Signer signer = Signer.builder(token)
+        .tspUrl("http://timestamp.digicert.com")
+        .trustSource(trust)
+        .allowMissingRevocationData(true)
+        .build();
+Verifier verifier = Verifier.builder(trust).allowMissingRevocationData(true).build();
+```
+
+`VerifiedData.signerCertStatusValidated()` reports whether revocation data was found.
+Do not use self-signed certificates in production.
 
 ## License
 

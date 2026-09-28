@@ -2,6 +2,7 @@ package io.compprov.trust;
 
 import eu.europa.esig.dss.enumerations.TimestampType;
 import eu.europa.esig.dss.jades.validation.JAdESDocumentValidatorFactory;
+import eu.europa.esig.dss.jades.validation.JAdESSignature;
 import eu.europa.esig.dss.model.InMemoryDocument;
 import eu.europa.esig.dss.spi.validation.CommonCertificateVerifier;
 import eu.europa.esig.dss.spi.x509.CommonTrustedCertificateSource;
@@ -13,7 +14,6 @@ import io.compprov.trust.exception.InvalidSignatureException;
 import io.compprov.trust.exception.InvalidSignatureException.Code;
 import io.compprov.trust.exception.NonSignedContentException;
 import io.compprov.trust.exception.TimestampNotFoundException;
-import org.jose4j.base64url.Base64Url;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,9 +22,11 @@ import java.security.cert.X509Certificate;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
+import java.util.Locale;
+import java.util.Objects;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -33,27 +35,32 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * <p>
  * Expects exactly one signature and one TSP timestamp. Any deviation — unsigned content,
  * multiple signers, missing or invalid timestamp — is reported as a {@link io.compprov.trust.exception.CompProvTrustException}.
+ * <p>
+ * Instances are created with {@link #builder(TrustedCertificateSource)}:
+ * <pre>{@code
+ * Verifier verifier = Verifier.builder(trustSource).build();
+ * }</pre>
  */
 public class Verifier {
 
-    private final Optional<TrustedCertificateSource> trustSource;
+    private final TrustedCertificateSource trustSource;
+    private final boolean allowMissingRevocationData;
 
-    /**
-     * Creates a {@code Verifier} without a trust anchor.
-     */
-    public Verifier() {
-        this.trustSource = Optional.empty();
+    private Verifier(Builder builder) {
+        this.trustSource = builder.trustSource;
+        this.allowMissingRevocationData = builder.allowMissingRevocationData;
     }
 
     /**
-     * Creates a {@code Verifier} with the given trust anchor.
+     * Starts building a {@code Verifier}.
      *
-     * @param trustSource trusted certificate source against which the signing certificate is
-     *                    validated. For production use, prefer certificates issued by a trusted Certificate Authority
-     *                    and use {@code Verifier()} constructor
+     * @param trustSource trusted certificate source against which the signing certificate chain is validated,
+     *                    e.g. the root certificate of the Certificate Authority that issued the signer certificate,
+     *                    or the signer certificate itself when it is self-signed
+     * @return a new builder
      */
-    public Verifier(TrustedCertificateSource trustSource) {
-        this.trustSource = Optional.ofNullable(trustSource);
+    public static Builder builder(TrustedCertificateSource trustSource) {
+        return new Builder(trustSource);
     }
 
     /**
@@ -61,7 +68,8 @@ public class Verifier {
      *
      * @param p12Stream input stream of the {@code .p12} / {@code .pfx} file
      * @param password  keystore password; {@code null} if the keystore has no password
-     * @return a trust source containing every certificate found in the keystore
+     * @return a trust source containing every certificate found in the keystore, ready to be passed to
+     * {@link #builder(TrustedCertificateSource)}
      */
     public static TrustedCertificateSource loadPkcs12(InputStream p12Stream, char[] password) {
         final var certSource = new KeyStoreCertificateSource(p12Stream, "PKCS12", password);
@@ -78,7 +86,8 @@ public class Verifier {
      * @param jadesJson JAdES JSON Serialization string, as produced by {@link Signer#signJson}
      * @return verified payload and signature metadata
      * @throws NonSignedContentException  if the document contains no signature or no signed payload
-     * @throws InvalidSignatureException  if the cryptographic signature or timestamp is invalid
+     * @throws InvalidSignatureException  if the cryptographic signature or timestamp is invalid, or the document
+     *                                    declares an unsupported format version (see {@link Signer#CONTENT_TYPE_V1})
      * @throws AmbiguousDataException     if the document contains more than one signature or timestamp
      * @throws ContentExtractionException if the signed payload cannot be read
      * @throws TimestampNotFoundException if the signature contains no TSP timestamp
@@ -86,30 +95,10 @@ public class Verifier {
     public VerifiedData verify(String jadesJson)
             throws NonSignedContentException, AmbiguousDataException,
             InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
-        return verify(jadesJson, true);
-    }
-
-    /**
-     * Validates the given JAdES document and returns the extracted payload and metadata.
-     *
-     * @param jadesJson                                 JAdES JSON Serialization string, as produced by {@link Signer#signJson}
-     * @param requireSigningCertificateStatusValidation recommended to use {@code true} for production.
-     *                                                  For testing purposes and self-signed certificated could be set
-     *                                                  to {@code false}
-     * @return verified payload and signature metadata
-     * @throws NonSignedContentException  if the document contains no signature or no signed payload
-     * @throws InvalidSignatureException  if the cryptographic signature or timestamp is invalid
-     * @throws AmbiguousDataException     if the document contains more than one signature or timestamp
-     * @throws ContentExtractionException if the signed payload cannot be read
-     * @throws TimestampNotFoundException if the signature contains no TSP timestamp
-     */
-    public VerifiedData verify(String jadesJson, boolean requireSigningCertificateStatusValidation)
-            throws NonSignedContentException, AmbiguousDataException,
-            InvalidSignatureException, ContentExtractionException, TimestampNotFoundException {
         final var document = new InMemoryDocument(jadesJson.getBytes(UTF_8));
 
         final var verifier = new CommonCertificateVerifier();
-        trustSource.ifPresent(ts -> verifier.setTrustedCertSources(ts));
+        verifier.setTrustedCertSources(trustSource);
 
         final var validator = new JAdESDocumentValidatorFactory().create(document);
         validator.setCertificateVerifier(verifier);
@@ -131,7 +120,7 @@ public class Verifier {
                     + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
         }
         if (!signatureDetails.getSignatureCryptographicVerification().isReferenceDataIntact()) {
-            throw new InvalidSignatureException(Code.PAYLOAD_TAMPERED, "isReferenceDataIntact=false. "
+            throw new InvalidSignatureException(Code.SIGNED_DATA_TAMPERED, "isReferenceDataIntact=false. "
                     + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
         }
         if (!signatureDetails.getSignatureCryptographicVerification().isSignatureIntact()) {
@@ -142,13 +131,18 @@ public class Verifier {
             throw new InvalidSignatureException(Code.SIGNATURE_INVALID, "isSignatureValid=false. "
                     + signatureDetails.getSignatureCryptographicVerification().getErrorMessage());
         }
+        // cty lives in the signed header, so it can only be trusted after the signature is proven intact.
+        // DSS returns "" for an absent header; documents without cty predate format versioning and are v1
+        final var contentType = ((JAdESSignature) signatureDetails).getJws().getProtectedHeaderValueAsString("cty");
+        if (contentType != null && !contentType.isBlank() && !normalizeMediaType(contentType).equals(normalizeMediaType(Signer.CONTENT_TYPE_V1))) {
+            throw new InvalidSignatureException(Code.UNSUPPORTED_FORMAT, "Unsupported content type: " + contentType);
+        }
         final var signerCertStatusValidated = !reports.getDiagnosticData().getSignatureById(sigId)
                 .getSigningCertificate().foundRevocations().getRelatedRevocationData().isEmpty();
-        if ((!signerCertStatusValidated) && (requireSigningCertificateStatusValidation)) {
+        if (!signerCertStatusValidated && !allowMissingRevocationData) {
             throw new InvalidSignatureException(Code.SIGNER_CERT_STATUS_NOT_VALIDATED,
                     sigId + " signing certificate status is not validated. " +
-                    "If self-signed certificates were used, specify TrustedCertificateSource when create Verifier and" +
-                    " verify signature using method verify(jadesJson, false)");
+                    "If a self-signed certificate was used, build the Verifier with allowMissingRevocationData(true)");
         }
 
         final var signerChainIds = new HashSet<>(reports.getDiagnosticData().getSignatureCertificateChainIds(sigId));
@@ -199,12 +193,14 @@ public class Verifier {
         }
 
         final var tspMessageImprint = timestamp.getMessageImprint();
-        final var encodedSignatureValue = Base64Url.encode(signatureDetails.getSignatureValue()).getBytes(UTF_8);
+        final var encodedSignatureValue = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(signatureDetails.getSignatureValue()).getBytes(UTF_8);
         final byte[] sigDig;
         try {
             sigDig = tspMessageImprint.getAlgorithm().getMessageDigest().digest(encodedSignatureValue);
         } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
+            throw new InvalidSignatureException(Code.TIMESTAMP_INVALID,
+                    "unsupported timestamp digest algorithm: " + tspMessageImprint.getAlgorithm(), e);
         }
         if (!Arrays.equals(tspMessageImprint.getValue(), sigDig)) {
             throw new InvalidSignatureException(Code.TIMESTAMP_COVERS_WRONG_DATA, "timestamp.matchData(sig)=false");
@@ -222,6 +218,14 @@ public class Verifier {
                 timestampWrapper.getProductionTime().toInstant(), ZoneOffset.UTC);
 
         return new VerifiedData(payloadJson, timestampZdt, tspChain, signerChain, signerCertStatusValidated);
+    }
+
+    /**
+     * Per RFC 7515 section 4.1.10, a {@code cty} value without '/' implies the {@code application/} prefix.
+     */
+    private static String normalizeMediaType(String mediaType) {
+        final var lower = mediaType.trim().toLowerCase(Locale.ROOT);
+        return lower.contains("/") ? lower : "application/" + lower;
     }
 
     /**
@@ -243,5 +247,38 @@ public class Verifier {
             List<X509Certificate> tspChain,
             List<X509Certificate> signerChain,
             boolean signerCertStatusValidated) {
+    }
+
+    /**
+     * Builder for {@link Verifier}.
+     */
+    public static final class Builder {
+
+        private final TrustedCertificateSource trustSource;
+        private boolean allowMissingRevocationData;
+
+        private Builder(TrustedCertificateSource trustSource) {
+            this.trustSource = Objects.requireNonNull(trustSource, "trustSource");
+        }
+
+        /**
+         * Set to {@code true} to accept signatures whose signing certificate has no revocation data
+         * (CRL or OCSP), e.g. self-signed certificates. Defaults to {@code false}, which is recommended
+         * for production. The outcome is reported in {@link VerifiedData#signerCertStatusValidated()}.
+         *
+         * @param allow whether missing revocation data is tolerated
+         * @return this builder
+         */
+        public Builder allowMissingRevocationData(boolean allow) {
+            this.allowMissingRevocationData = allow;
+            return this;
+        }
+
+        /**
+         * @return a configured {@link Verifier}
+         */
+        public Verifier build() {
+            return new Verifier(this);
+        }
     }
 }

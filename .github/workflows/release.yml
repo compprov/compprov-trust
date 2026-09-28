@@ -1,4 +1,4 @@
-# Publish compprov-core to Maven Central.
+# Publish compprov-trust to Maven Central.
 #
 # Trigger options:
 #   - Push a tag in the form v<semver>  (e.g. v0.1.0)  — fully automated.

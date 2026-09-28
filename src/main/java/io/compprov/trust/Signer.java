@@ -26,7 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
-import java.util.Optional;
+import java.util.Objects;
 
 /**
  * Signs JSON content as an enveloping JAdES Baseline-LT signature.
@@ -34,35 +34,42 @@ import java.util.Optional;
  * The produced document is a self-contained JWS JSON Serialization structure that embeds
  * the original payload, the signing certificate chain, and a long-term timestamp
  * obtained from an external TSP (Time-Stamp Protocol) service.
+ * <p>
+ * Instances are created with {@link #builder(SignatureTokenConnection)}:
+ * <pre>{@code
+ * Signer signer = Signer.builder(Signer.loadPkcs12(p12Stream, password))
+ *         .tspUrl("http://timestamp.digicert.com")
+ *         .build();
+ * }</pre>
  */
 public class Signer {
 
+    /**
+     * Format version marker written to the signed {@code cty} (content type) JWS header.
+     * {@link Verifier} rejects documents carrying any other value.
+     */
+    public static final String CONTENT_TYPE_V1 = "vnd.compprov.trust.v1+json";
+
     private final SignatureTokenConnection signatureToken;
     private final TSPSource tspSource;
-    private final Optional<TrustedCertificateSource> trustSource;
+    private final TrustedCertificateSource trustSource;
+    private final boolean allowMissingRevocationData;
 
-    /**
-     * Creates a {@code Signer} with an HTTP TSP endpoint.
-     *
-     * @param signatureToken signature token holding the signing key; must contain exactly one key pair
-     * @param tspSource      URL of the TSP service, e.g. {@code http://timestamp.digicert.com}
-     * @param trustSource    trusted certificate source used during signing-time validation
-     */
-    public Signer(SignatureTokenConnection signatureToken, String tspSource, Optional<TrustedCertificateSource> trustSource) {
-        this(signatureToken, buildTspSource(tspSource), trustSource);
+    private Signer(Builder builder) {
+        this.signatureToken = builder.signatureToken;
+        this.tspSource = Objects.requireNonNull(builder.tspSource, "TSP source is not set");
+        this.trustSource = builder.trustSource;
+        this.allowMissingRevocationData = builder.allowMissingRevocationData;
     }
 
     /**
-     * Creates a {@code Signer} with a pre-configured TSP source.
+     * Starts building a {@code Signer}.
      *
      * @param signatureToken signature token holding the signing key; must contain exactly one key pair
-     * @param tspSource      pre-configured TSP source
-     * @param trustSource    trusted certificate source used during signing-time validation
+     * @return a new builder
      */
-    public Signer(SignatureTokenConnection signatureToken, TSPSource tspSource, Optional<TrustedCertificateSource> trustSource) {
-        this.signatureToken = signatureToken;
-        this.tspSource = tspSource;
-        this.trustSource = trustSource;
+    public static Builder builder(SignatureTokenConnection signatureToken) {
+        return new Builder(signatureToken);
     }
 
     /**
@@ -70,7 +77,7 @@ public class Signer {
      *
      * @param p12Stream input stream of the {@code .p12} / {@code .pfx} file
      * @param password  keystore password
-     * @return a signature token ready to be passed to a {@link Signer} constructor
+     * @return a signature token ready to be passed to {@link #builder(SignatureTokenConnection)}
      */
     public static Pkcs12SignatureToken loadPkcs12(InputStream p12Stream, char[] password) {
         return new Pkcs12SignatureToken(p12Stream, new KeyStore.PasswordProtection(password));
@@ -79,7 +86,7 @@ public class Signer {
     /**
      * Signs the given JSON string and returns a JAdES Baseline-LT envelope as a JSON string.
      *
-     * @param jsonContent JSON payload to sign; must be valid UTF-8
+     * @param jsonContent JSON payload to sign
      * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
      * and embedded timestamp
      * @throws ContentExtractionException if the keystore contains no key, or if the signed document
@@ -88,25 +95,6 @@ public class Signer {
      * @throws ExternalServiceException   if the DSS signing or timestamping operation fails
      */
     public String signJson(String jsonContent)
-            throws ContentExtractionException, AmbiguousDataException, ExternalServiceException {
-        return signJson(jsonContent, false);
-    }
-
-    /**
-     * Signs the given JSON string and returns a JAdES Baseline-LT envelope as a JSON string.
-     *
-     * @param jsonContent         JSON payload to sign; must be valid UTF-8
-     * @param skipRevocationCheck set to {@code true} for self-signed certificates to suppress
-     *                            missing-revocation-data errors during signing; {@code false} for
-     *                            certificates issued by a trusted CA
-     * @return JAdES JSON Serialization document containing the payload, signature, certificate chain,
-     * and embedded timestamp
-     * @throws ContentExtractionException if the keystore contains no key, or if the signed document
-     *                                    cannot be serialized
-     * @throws AmbiguousDataException     if the keystore contains more than one key pair
-     * @throws ExternalServiceException   if the DSS signing or timestamping operation fails
-     */
-    public String signJson(String jsonContent, boolean skipRevocationCheck)
             throws ContentExtractionException, AmbiguousDataException, ExternalServiceException {
         final var keys = signatureToken.getKeys();
         if (keys.isEmpty()) {
@@ -124,11 +112,14 @@ public class Signer {
         parameters.setSignaturePackaging(SignaturePackaging.ENVELOPING);
         parameters.setJwsSerializationType(JWSSerializationType.JSON_SERIALIZATION);
         parameters.setIncludeCertificateChain(true);
+        parameters.setContentType(CONTENT_TYPE_V1);
         parameters.bLevel().setTrustAnchorBPPolicy(false);
 
         final var verifier = new CommonCertificateVerifier();
-        trustSource.ifPresent(ts -> verifier.addTrustedCertSources(ts));
-        if (skipRevocationCheck) {
+        if (trustSource != null) {
+            verifier.addTrustedCertSources(trustSource);
+        }
+        if (allowMissingRevocationData) {
             verifier.setAlertOnMissingRevocationData(new SilentOnStatusAlert());
         }
 
@@ -154,9 +145,74 @@ public class Signer {
         }
     }
 
-    private static OnlineTSPSource buildTspSource(String url) {
-        final var source = new OnlineTSPSource(url);
-        source.setDataLoader(new CommonsDataLoader());
-        return source;
+    /**
+     * Builder for {@link Signer}. A TSP source must be set via {@link #tspUrl(String)} or
+     * {@link #tspSource(TSPSource)}; everything else is optional.
+     */
+    public static final class Builder {
+
+        private final SignatureTokenConnection signatureToken;
+        private TSPSource tspSource;
+        private TrustedCertificateSource trustSource;
+        private boolean allowMissingRevocationData;
+
+        private Builder(SignatureTokenConnection signatureToken) {
+            this.signatureToken = Objects.requireNonNull(signatureToken, "signatureToken");
+        }
+
+        /**
+         * Uses an HTTP TSP endpoint.
+         *
+         * @param url URL of the TSP service, e.g. {@code http://timestamp.digicert.com}
+         * @return this builder
+         */
+        public Builder tspUrl(String url) {
+            final var source = new OnlineTSPSource(Objects.requireNonNull(url, "url"));
+            source.setDataLoader(new CommonsDataLoader());
+            this.tspSource = source;
+            return this;
+        }
+
+        /**
+         * Uses a pre-configured TSP source.
+         *
+         * @param tspSource TSP source
+         * @return this builder
+         */
+        public Builder tspSource(TSPSource tspSource) {
+            this.tspSource = Objects.requireNonNull(tspSource, "tspSource");
+            return this;
+        }
+
+        /**
+         * Sets the trusted certificate source used during signing-time validation. Optional.
+         *
+         * @param trustSource trusted certificate source
+         * @return this builder
+         */
+        public Builder trustSource(TrustedCertificateSource trustSource) {
+            this.trustSource = trustSource;
+            return this;
+        }
+
+        /**
+         * Set to {@code true} for self-signed certificates to suppress missing-revocation-data errors
+         * during signing. Defaults to {@code false}, which is what certificates issued by a trusted CA need.
+         *
+         * @param allow whether missing revocation data (CRL/OCSP) is tolerated
+         * @return this builder
+         */
+        public Builder allowMissingRevocationData(boolean allow) {
+            this.allowMissingRevocationData = allow;
+            return this;
+        }
+
+        /**
+         * @return a configured {@link Signer}
+         * @throws NullPointerException if no TSP source was set
+         */
+        public Signer build() {
+            return new Signer(this);
+        }
     }
 }
