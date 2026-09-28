@@ -42,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class VerifierTest {
 
     private String signedJson;
+    private CommonTrustedCertificateSource trust;
     private Verifier verifier;
     private X509Certificate signerCertificate;
     private X509Certificate tspCertificate;
@@ -59,15 +60,16 @@ public class VerifierTest {
                 .generateCertificate(new ByteArrayInputStream(Base64.decode(b64SignerCert)));
         tspCertificate = (X509Certificate) certificateFactory
                 .generateCertificate(new ByteArrayInputStream(Base64.decode(b64TspCert)));
-        final var trust = new CommonTrustedCertificateSource();
+        trust = new CommonTrustedCertificateSource();
         trust.addCertificate(new CertificateToken(signerCertificate));
-        verifier = new Verifier(trust);
+        //we use self-signed certificate for test purposes, which carries no revocation data
+        verifier = Verifier.builder(trust).allowMissingRevocationData(true).build();
     }
 
     @Test
     void verify() throws Exception {
         final var cpgJson = new String(VerifierTest.class.getResourceAsStream("/cpg.json").readAllBytes());
-        final var result = verifier.verify(signedJson, false);
+        final var result = verifier.verify(signedJson);
 
         //for test purposes
         assertEquals(1, result.signerChain().size());
@@ -98,7 +100,7 @@ public class VerifierTest {
 
     @Test
     void verifyFailsForPlainJson() {
-        assertThrows(NonSignedContentException.class, () -> verifier.verify("{\"a\":\"b\"}", false));
+        assertThrows(NonSignedContentException.class, () -> verifier.verify("{\"a\":\"b\"}"));
     }
 
     @Test
@@ -108,7 +110,7 @@ public class VerifierTest {
         final var signatures = (ArrayNode) root.get("signatures");
         signatures.add(signatures.get(0).deepCopy());
 
-        assertThrows(AmbiguousDataException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        assertThrows(AmbiguousDataException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
     }
 
     @Test
@@ -128,7 +130,7 @@ public class VerifierTest {
                 java.util.Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
 
-        assertThrows(AmbiguousDataException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        assertThrows(AmbiguousDataException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
     }
 
     @Test
@@ -138,7 +140,7 @@ public class VerifierTest {
         final var sig = root.get("signatures").get(0);
         ((ObjectNode) sig.get("header")).remove("etsiU");
 
-        assertThrows(TimestampNotFoundException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        assertThrows(TimestampNotFoundException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
     }
 
     @Test
@@ -147,7 +149,7 @@ public class VerifierTest {
         final var root = (ObjectNode) mapper.readTree(signedJson);
         root.remove("payload");
 
-        var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
         assertEquals(InvalidSignatureException.Code.PAYLOAD_NOT_FOUND, ex.getCode());
     }
 
@@ -159,8 +161,8 @@ public class VerifierTest {
         final var flipped = (orig.charAt(0) == 'e') ? 'f' : 'e';
         root.put("payload", flipped + orig.substring(1));
 
-        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
-        assertEquals(InvalidSignatureException.Code.PAYLOAD_TAMPERED, ex.getCode());
+        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
+        assertEquals(InvalidSignatureException.Code.SIGNED_DATA_TAMPERED, ex.getCode());
     }
 
     @Test
@@ -186,7 +188,7 @@ public class VerifierTest {
                 java.util.Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
 
-        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
         assertEquals(InvalidSignatureException.Code.TIMESTAMP_SIGNATURE_TAMPERED, ex.getCode());
     }
 
@@ -209,7 +211,7 @@ public class VerifierTest {
                 java.util.Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
 
-        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
         assertEquals(InvalidSignatureException.Code.TIMESTAMP_WRONG_TYPE, ex.getCode());
     }
 
@@ -256,7 +258,7 @@ public class VerifierTest {
                 java.util.Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
 
-        var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root), false));
+        var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(mapper.writeValueAsString(root)));
         assertEquals(InvalidSignatureException.Code.TIMESTAMP_IMPRINT_TAMPERED, ex.getCode());
     }
 
@@ -267,7 +269,16 @@ public class VerifierTest {
         final var wrongTrust = new CommonTrustedCertificateSource();
         wrongTrust.addCertificate(new CertificateToken(cert));
 
-        final var ex = assertThrows(InvalidSignatureException.class, () -> new Verifier(wrongTrust).verify(signedJson, false));
+        final var wrongVerifier = Verifier.builder(wrongTrust).allowMissingRevocationData(true).build();
+        final var ex = assertThrows(InvalidSignatureException.class, () -> wrongVerifier.verify(signedJson));
+        assertEquals(InvalidSignatureException.Code.SIGNATURE_NOT_VALID, ex.getCode());
+    }
+
+    @Test
+    void verifyFailsForEmptyTrustAnchor() {
+        final var emptyVerifier = Verifier.builder(new CommonTrustedCertificateSource())
+                .allowMissingRevocationData(true).build();
+        final var ex = assertThrows(InvalidSignatureException.class, () -> emptyVerifier.verify(signedJson));
         assertEquals(InvalidSignatureException.Code.SIGNATURE_NOT_VALID, ex.getCode());
     }
 
@@ -314,13 +325,14 @@ public class VerifierTest {
                         .encodeToString(mapper.writeValueAsBytes(sigTstJson))));
 
         // - this is why it is important to explicitly check TSP certificate
-        final var result = verifier.verify(mapper.writeValueAsString(root), false);
+        final var result = verifier.verify(mapper.writeValueAsString(root));
         assertFalse(result.tspChain().stream().anyMatch(tspCertificate::equals));
     }
 
     @Test
     void verifyFailsWithoutSigningCertificateStatusValidation() {
-        final var ex = assertThrows(InvalidSignatureException.class, () -> verifier.verify(signedJson));
+        final var strictVerifier = Verifier.builder(trust).build();
+        final var ex = assertThrows(InvalidSignatureException.class, () -> strictVerifier.verify(signedJson));
         assertEquals(InvalidSignatureException.Code.SIGNER_CERT_STATUS_NOT_VALIDATED, ex.getCode());
     }
 
